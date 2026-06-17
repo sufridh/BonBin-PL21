@@ -8,35 +8,75 @@ const router = express.Router();
 const API_KEY = process.env.FOOTBALL_API_KEY;
 const WC_2026_ID = 2000;
 
-// Cache for scorers (5-minute TTL to avoid hammering the API)
-let scorersCache = null;
+// ── Cache ────────────────────────────────────────────────────────────────────
+let playersCache = null;          // merged scorers + squad players
+let playersCachedAt = 0;
+const PLAYERS_TTL_MS = 60 * 60 * 1000; // 1 hour — squads don't change often
+
+let scorersCache = null;          // raw scorer data for goal tallies
 let scorersCachedAt = 0;
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const SCORERS_TTL_MS = 5 * 60 * 1000;  // 5 minutes
 
-async function fetchScorers() {
+// Maps football-data.org team names → flag emoji
+// Covers all WC 2026 qualified nations + common alternate spellings
+const FLAG_MAP = {
+  'Argentina': '🇦🇷', 'Brazil': '🇧🇷', 'France': '🇫🇷', 'Germany': '🇩🇪',
+  'Spain': '🇪🇸', 'England': '🏴󠁧󠁢󠁥󠁮󠁧󠁿', 'Portugal': '🇵🇹', 'Netherlands': '🇳🇱',
+  'Italy': '🇮🇹', 'Belgium': '🇧🇪', 'Croatia': '🇭🇷', 'Morocco': '🇲🇦',
+  'Mexico': '🇲🇽', 'Canada': '🇨🇦', 'Japan': '🇯🇵',
+  'South Korea': '🇰🇷', 'Korea Republic': '🇰🇷',
+  'Australia': '🇦🇺', 'Uruguay': '🇺🇾', 'Colombia': '🇨🇴',
+  'Switzerland': '🇨🇭', 'Denmark': '🇩🇰', 'Poland': '🇵🇱', 'Serbia': '🇷🇸',
+  'Ecuador': '🇪🇨', 'Saudi Arabia': '🇸🇦', 'Senegal': '🇸🇳',
+  'Iran': '🇮🇷', 'Qatar': '🇶🇦', 'Tunisia': '🇹🇳',
+  'Indonesia': '🇮🇩', 'Costa Rica': '🇨🇷', 'Panama': '🇵🇦',
+  // football-data.org uses "United States" not "USA"
+  'United States': '🇺🇸', 'USA': '🇺🇸',
+  // China
+  'China PR': '🇨🇳', 'China': '🇨🇳',
+  // Africa
+  'Nigeria': '🇳🇬', 'Cameroon': '🇨🇲', 'Ghana': '🇬🇭', 'Egypt': '🇪🇬',
+  "Côte d'Ivoire": '🇨🇮', 'Ivory Coast': '🇨🇮', 'Mali': '🇲🇱',
+  'South Africa': '🇿🇦', 'Algeria': '🇩🇿', 'Benin': '🇧🇯',
+  'Congo DR': '🇨🇩', 'DR Congo': '🇨🇩', 'Zambia': '🇿🇲',
+  'Tanzania': '🇹🇿', 'Uganda': '🇺🇬', 'Kenya': '🇰🇪', 'Comoros': '🇰🇲',
+  // Europe extras
+  'Turkey': '🇹🇷', 'Ukraine': '🇺🇦', 'Austria': '🇦🇹', 'Hungary': '🇭🇺',
+  'Romania': '🇷🇴', 'Slovakia': '🇸🇰', 'Slovenia': '🇸🇮', 'Greece': '🇬🇷',
+  'Czech Republic': '🇨🇿', 'Czechia': '🇨🇿',
+  'Albania': '🇦🇱', 'Scotland': '🏴󠁧󠁢󠁳󠁣󠁴󠁿', 'Wales': '🏴󠁧󠁢󠁷󠁬󠁳󠁿', 'Ireland': '🇮🇪',
+  'Norway': '🇳🇴', 'Sweden': '🇸🇪', 'Finland': '🇫🇮', 'Iceland': '🇮🇸',
+  'Bosnia and Herzegovina': '🇧🇦', 'North Macedonia': '🇲🇰',
+  'Montenegro': '🇲🇪', 'Georgia': '🇬🇪', 'Armenia': '🇦🇲',
+  'Israel': '🇮🇱', 'Kazakhstan': '🇰🇿', 'Uzbekistan': '🇺🇿', 'Azerbaijan': '🇦🇿',
+  // Americas extras
+  'Venezuela': '🇻🇪', 'Bolivia': '🇧🇴', 'Paraguay': '🇵🇾', 'Chile': '🇨🇱', 'Peru': '🇵🇪',
+  'Honduras': '🇭🇳', 'Jamaica': '🇯🇲', 'Haiti': '🇭🇹', 'Trinidad and Tobago': '🇹🇹',
+  'Guatemala': '🇬🇹', 'El Salvador': '🇸🇻', 'Cuba': '🇨🇺', 'Curaçao': '🇨🇼',
+  // Middle East / Asia extras
+  'Iraq': '🇮🇶', 'Jordan': '🇯🇴', 'Oman': '🇴🇲', 'Bahrain': '🇧🇭',
+  'Kuwait': '🇰🇼', 'UAE': '🇦🇪', 'United Arab Emirates': '🇦🇪',
+  'Syria': '🇸🇾', 'Lebanon': '🇱🇧', 'Palestine': '🇵🇸',
+  'New Zealand': '🇳🇿', 'Philippines': '🇵🇭', 'Thailand': '🇹🇭',
+  'Vietnam': '🇻🇳', 'India': '🇮🇳', 'Pakistan': '🇵🇰',
+};
+
+function getFlag(teamName) {
+  return FLAG_MAP[teamName] || '🏳️';
+}
+
+// ── Fetch live scorers (goal tallies only) ───────────────────────────────────
+async function fetchRawScorers() {
   const now = Date.now();
-  if (scorersCache && now - scorersCachedAt < CACHE_TTL_MS) {
-    return scorersCache;
-  }
-
-  if (!API_KEY || API_KEY === 'your_football_data_org_api_key') {
-    return [];
-  }
+  if (scorersCache && now - scorersCachedAt < SCORERS_TTL_MS) return scorersCache;
+  if (!API_KEY || API_KEY === 'your_football_data_org_api_key') return [];
 
   try {
-    const response = await axios.get(
-      `https://api.football-data.org/v4/competitions/${WC_2026_ID}/scorers?limit=100`,
+    const res = await axios.get(
+      `https://api.football-data.org/v4/competitions/${WC_2026_ID}/scorers?limit=200`,
       { headers: { 'X-Auth-Token': API_KEY }, timeout: 10000 }
     );
-
-    scorersCache = (response.data.scorers || []).map(s => ({
-      player_id: s.player.id,
-      player_name: s.player.name,
-      team_name: s.team.name,
-      goals: s.goals,
-      assists: s.assists ?? 0,
-      penalties: s.penalties ?? 0,
-    }));
+    scorersCache = res.data.scorers || [];
     scorersCachedAt = now;
     return scorersCache;
   } catch (err) {
@@ -45,13 +85,80 @@ async function fetchScorers() {
   }
 }
 
-// GET /api/golden-boot/scorers — live scorer list for the pick UI
+// ── Fetch all WC teams + squads in ONE call, merge with scorers ──────────────
+async function fetchAllPlayers() {
+  const now = Date.now();
+  if (playersCache && now - playersCachedAt < PLAYERS_TTL_MS) return playersCache;
+  if (!API_KEY || API_KEY === 'your_football_data_org_api_key') return [];
+
+  try {
+    // One call gets all 48 teams with their squads
+    const [teamsRes, rawScorers] = await Promise.all([
+      axios.get(
+        `https://api.football-data.org/v4/competitions/${WC_2026_ID}/teams`,
+        { headers: { 'X-Auth-Token': API_KEY }, timeout: 15000 }
+      ),
+      fetchRawScorers(),
+    ]);
+
+    // Build scorer lookup: player_id → goals
+    const goalsMap = {};
+    for (const s of rawScorers) {
+      goalsMap[s.player.id] = s.goals || 0;
+    }
+
+    const players = [];
+    for (const team of (teamsRes.data.teams || [])) {
+      const teamName = team.name;
+      const teamFlag = getFlag(teamName);
+      for (const player of (team.squad || [])) {
+        // Only outfield + attackers who might score — include everyone except GKs
+        // Actually include all: defenders & midfielders score too at WC
+        players.push({
+          player_id: player.id,
+          player_name: player.name,
+          team_name: teamName,
+          team_flag: teamFlag,
+          position: player.position,
+          goals: goalsMap[player.id] || 0,
+        });
+      }
+    }
+
+    // Sort: scorers first (by goals desc), then rest alphabetically by team+name
+    players.sort((a, b) => {
+      if (b.goals !== a.goals) return b.goals - a.goals;
+      if (a.team_name !== b.team_name) return a.team_name.localeCompare(b.team_name);
+      return a.player_name.localeCompare(b.player_name);
+    });
+
+    playersCache = players;
+    playersCachedAt = now;
+    return players;
+  } catch (err) {
+    console.error('[GoldenBoot] Teams/squad fetch error:', err.message);
+    // Fallback: return raw scorers only
+    const raw = await fetchRawScorers();
+    return raw.map(s => ({
+      player_id: s.player.id,
+      player_name: s.player.name,
+      team_name: s.team.name,
+      team_flag: getFlag(s.team.name),
+      position: null,
+      goals: s.goals || 0,
+    }));
+  }
+}
+
+// ── Routes ───────────────────────────────────────────────────────────────────
+
+// GET /api/golden-boot/scorers — full player list (squad + live goal tallies)
 router.get('/scorers', authMiddleware, async (req, res) => {
   try {
-    const scorers = await fetchScorers();
-    res.json(scorers);
+    const players = await fetchAllPlayers();
+    res.json(players);
   } catch (err) {
-    res.status(500).json({ error: 'Could not fetch scorers' });
+    res.status(500).json({ error: 'Could not fetch players' });
   }
 });
 
@@ -77,7 +184,6 @@ router.post('/pick', authMiddleware, async (req, res) => {
   }
 
   try {
-    // Check if the winner has already been announced — lock picks if so
     const winnerRes = await pool.query('SELECT id FROM golden_boot_winner LIMIT 1');
     if (winnerRes.rows.length > 0) {
       return res.status(403).json({ error: 'Golden Boot winner already announced — picks are locked' });
@@ -89,7 +195,7 @@ router.post('/pick', authMiddleware, async (req, res) => {
        ON CONFLICT (user_id) DO UPDATE SET
          player_id=$2, player_name=$3, team_name=$4, team_flag=$5, updated_at=NOW()
        RETURNING *`,
-      [req.user.id, player_id, player_name, team_name, team_flag || '🏳️']
+      [req.user.id, player_id, player_name, team_name, team_flag || getFlag(team_name)]
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -98,7 +204,7 @@ router.post('/pick', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/golden-boot/all — all users' picks (visible to everyone after winner is set, or admin always)
+// GET /api/golden-boot/all — all users' picks (admin always; others only after winner set)
 router.get('/all', authMiddleware, async (req, res) => {
   try {
     const winnerRes = await pool.query('SELECT * FROM golden_boot_winner LIMIT 1');
@@ -142,7 +248,6 @@ router.post('/winner', adminMiddleware, async (req, res) => {
   }
 
   try {
-    // Replace any existing winner
     await pool.query('DELETE FROM golden_boot_winner');
     const result = await pool.query(
       `INSERT INTO golden_boot_winner (player_id, player_name, team_name, goals)
@@ -156,7 +261,7 @@ router.post('/winner', adminMiddleware, async (req, res) => {
   }
 });
 
-// DELETE /api/golden-boot/winner — admin clears the winner (re-opens picks)
+// DELETE /api/golden-boot/winner — admin clears the winner
 router.delete('/winner', adminMiddleware, async (req, res) => {
   try {
     await pool.query('DELETE FROM golden_boot_winner');
