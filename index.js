@@ -5,6 +5,7 @@ const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const matchRoutes = require('./routes/matches');
 const pickRoutes = require('./routes/picks');
+const goldenBootRoutes = require('./routes/golden_boot');
 const { startScheduler } = require('./sync');
 
 const app = express();
@@ -29,6 +30,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', app: 'Bonbin PL Pick\'
 app.use('/api/auth', authRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/picks', pickRoutes);
+app.use('/api/golden-boot', goldenBootRoutes);
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
