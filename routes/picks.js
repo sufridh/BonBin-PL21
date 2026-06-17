@@ -92,16 +92,7 @@ router.get('/match/:match_id', authMiddleware, async (req, res) => {
 
     const result = await pool.query(
       `SELECT p.home_score_pick, p.away_score_pick, u.display_name, u.username,
-        CASE 
-          WHEN m.home_score IS NOT NULL AND p.home_score_pick = m.home_score AND p.away_score_pick = m.away_score THEN 3
-          WHEN m.home_score IS NOT NULL AND (
-            (p.home_score_pick > p.away_score_pick AND m.home_score > m.away_score) 
-            OR (p.home_score_pick < p.away_score_pick AND m.home_score < m.away_score)
-            OR (p.home_score_pick = p.away_score_pick AND m.home_score = m.away_score)
-          ) THEN 1
-          WHEN m.home_score IS NOT NULL THEN 0
-          ELSE NULL
-        END as points_earned
+        calculate_points(p.home_score_pick, p.away_score_pick, m.home_score, m.away_score) as points_earned
        FROM picks p
        JOIN users u ON p.user_id = u.id
        JOIN matches m ON p.match_id = m.id

@@ -12,16 +12,7 @@ router.get('/', authMiddleware, async (req, res) => {
         m.*,
         p.home_score_pick,
         p.away_score_pick,
-        CASE 
-          WHEN m.home_score IS NOT NULL AND p.home_score_pick = m.home_score AND p.away_score_pick = m.away_score THEN 3
-          WHEN m.home_score IS NOT NULL AND (
-            (p.home_score_pick > p.away_score_pick AND m.home_score > m.away_score) 
-            OR (p.home_score_pick < p.away_score_pick AND m.home_score < m.away_score)
-            OR (p.home_score_pick = p.away_score_pick AND m.home_score = m.away_score)
-          ) THEN 1
-          WHEN m.home_score IS NOT NULL AND p.id IS NOT NULL THEN 0
-          ELSE NULL
-        END as points_earned
+        CASE WHEN p.id IS NOT NULL THEN calculate_points(p.home_score_pick, p.away_score_pick, m.home_score, m.away_score) ELSE NULL END as points_earned
       FROM matches m
       LEFT JOIN picks p ON m.id = p.match_id AND p.user_id = $1
       ORDER BY m.match_date ASC
