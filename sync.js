@@ -1,6 +1,6 @@
 const axios = require('axios');
 const cron = require('node-cron');
-const pool = require('../db/pool');
+const pool = require('./db/pool');
 
 const API_KEY = process.env.FOOTBALL_API_KEY;
 const WC_2026_ID = 2000; // football-data.org competition ID for World Cup 2026
