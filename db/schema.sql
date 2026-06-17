@@ -9,8 +9,12 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   display_name VARCHAR(100) NOT NULL,
   is_admin BOOLEAN DEFAULT FALSE,
+  avatar_base64 TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Run this if you already have an existing users table:
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_base64 TEXT;
 
 CREATE TABLE IF NOT EXISTS matches (
   id SERIAL PRIMARY KEY,
@@ -46,12 +50,16 @@ CREATE TABLE IF NOT EXISTS picks (
 -- =============================================
 -- Leaderboard view
 -- Scoring: exact score = 3pts, correct result = 1pt
+-- NOTE: if this view already exists in your database with a different
+-- column list, Postgres will reject CREATE OR REPLACE — run
+-- `DROP VIEW IF EXISTS leaderboard;` first, then re-run this file.
 -- =============================================
 CREATE OR REPLACE VIEW leaderboard AS
 SELECT 
   u.id,
   u.display_name,
   u.username,
+  u.avatar_base64,
   COUNT(p.id) as total_picks,
   COALESCE(SUM(
     CASE 
@@ -100,5 +108,5 @@ SELECT
 FROM users u
 LEFT JOIN picks p ON u.id = p.user_id
 LEFT JOIN matches m ON p.match_id = m.id
-GROUP BY u.id, u.display_name, u.username
+GROUP BY u.id, u.display_name, u.username, u.avatar_base64
 ORDER BY total_points DESC, exact_scores DESC, total_picks DESC;

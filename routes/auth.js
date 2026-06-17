@@ -35,7 +35,7 @@ router.post('/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
-      'INSERT INTO users (username, display_name, password_hash) VALUES ($1, $2, $3) RETURNING id, username, display_name, is_admin',
+      'INSERT INTO users (username, display_name, password_hash) VALUES ($1, $2, $3) RETURNING id, username, display_name, is_admin, avatar_base64',
       [username.toLowerCase(), display_name, hash]
     );
 
@@ -46,7 +46,7 @@ router.post('/register', async (req, res) => {
       { expiresIn: '30d' }
     );
 
-    res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, is_admin: user.is_admin } });
+    res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, is_admin: user.is_admin, avatar_base64: user.avatar_base64 } });
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -63,7 +63,7 @@ router.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, username, display_name, password_hash, is_admin FROM users WHERE username = $1',
+      'SELECT id, username, display_name, password_hash, is_admin, avatar_base64 FROM users WHERE username = $1',
       [username.toLowerCase()]
     );
 
@@ -84,7 +84,7 @@ router.post('/login', async (req, res) => {
       { expiresIn: '30d' }
     );
 
-    res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, is_admin: user.is_admin } });
+    res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, is_admin: user.is_admin, avatar_base64: user.avatar_base64 } });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -95,12 +95,69 @@ router.post('/login', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, display_name, is_admin, created_at FROM users WHERE id = $1',
+      'SELECT id, username, display_name, is_admin, avatar_base64, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json(result.rows[0]);
   } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/auth/me
+// Update display_name and/or avatar (avatar sent as a data URL, e.g. "data:image/png;base64,...")
+const MAX_AVATAR_BYTES = 400 * 1024; // ~400KB decoded, keeps Postgres rows + JWT payloads sane
+
+router.put('/me', authMiddleware, async (req, res) => {
+  const { display_name, avatar_base64 } = req.body;
+
+  const updates = [];
+  const values = [];
+  let paramIndex = 1;
+
+  if (display_name !== undefined) {
+    const trimmed = String(display_name).trim();
+    if (trimmed.length < 1 || trimmed.length > 100) {
+      return res.status(400).json({ error: 'Display name must be 1–100 characters' });
+    }
+    updates.push(`display_name = $${paramIndex++}`);
+    values.push(trimmed);
+  }
+
+  if (avatar_base64 !== undefined) {
+    if (avatar_base64 === null) {
+      // Allow clearing the avatar
+      updates.push(`avatar_base64 = $${paramIndex++}`);
+      values.push(null);
+    } else {
+      const match = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$/.exec(avatar_base64);
+      if (!match) {
+        return res.status(400).json({ error: 'Avatar must be a base64 image data URL (png, jpeg, webp, or gif)' });
+      }
+      const decodedSize = Buffer.byteLength(match[2], 'base64');
+      if (decodedSize > MAX_AVATAR_BYTES) {
+        return res.status(400).json({ error: 'Image too large — please use a photo under ~400KB' });
+      }
+      updates.push(`avatar_base64 = $${paramIndex++}`);
+      values.push(avatar_base64);
+    }
+  }
+
+  if (updates.length === 0) {
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+
+  values.push(req.user.id);
+
+  try {
+    const result = await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, username, display_name, is_admin, avatar_base64`,
+      values
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Update profile error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
