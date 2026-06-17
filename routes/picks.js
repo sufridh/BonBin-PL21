@@ -62,7 +62,10 @@ router.post('/', authMiddleware, async (req, res) => {
 router.get('/my', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.*, m.home_team, m.away_team, m.home_flag, m.away_flag, 
+      `SELECT p.id, p.user_id, p.match_id, p.home_score_pick, p.away_score_pick,
+              p.created_at, p.updated_at,
+              calculate_points(p.home_score_pick, p.away_score_pick, m.home_score, m.away_score) as points_earned,
+              m.home_team, m.away_team, m.home_flag, m.away_flag, 
               m.match_date, m.home_score, m.away_score, m.status, m.stage
        FROM picks p
        JOIN matches m ON p.match_id = m.id
