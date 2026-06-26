@@ -189,6 +189,11 @@ router.post('/pick', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Golden Boot winner already announced — picks are locked' });
     }
 
+    const settingsRes = await pool.query('SELECT is_locked FROM golden_boot_settings WHERE id = 1');
+    if (settingsRes.rows[0]?.is_locked) {
+      return res.status(403).json({ error: 'Golden Boot picks are locked by the admin' });
+    }
+
     const result = await pool.query(
       `INSERT INTO golden_boot_picks (user_id, player_id, player_name, team_name, team_flag, updated_at)
        VALUES ($1, $2, $3, $4, $5, NOW())
@@ -235,6 +240,39 @@ router.get('/winner', async (req, res) => {
     const result = await pool.query('SELECT * FROM golden_boot_winner LIMIT 1');
     res.json(result.rows[0] || null);
   } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/golden-boot/lock — current lock status (public, so the picks UI can disable itself)
+router.get('/lock', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT is_locked, locked_at FROM golden_boot_settings WHERE id = 1');
+    res.json(result.rows[0] || { is_locked: false, locked_at: null });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/golden-boot/lock — admin locks/unlocks Golden Boot submissions
+router.patch('/lock', adminMiddleware, async (req, res) => {
+  const { is_locked } = req.body;
+  if (typeof is_locked !== 'boolean') {
+    return res.status(400).json({ error: 'is_locked (boolean) required' });
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO golden_boot_settings (id, is_locked, locked_at)
+       VALUES (1, $1, CASE WHEN $1 THEN NOW() ELSE NULL END)
+       ON CONFLICT (id) DO UPDATE SET
+         is_locked = $1,
+         locked_at = CASE WHEN $1 THEN NOW() ELSE NULL END
+       RETURNING *`,
+      [is_locked]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Toggle golden boot lock error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
