@@ -68,21 +68,29 @@ async function syncMatches() {
       if (match.status === 'FINISHED') status = 'finished';
       else if (match.status === 'IN_PLAY' || match.status === 'PAUSED') status = 'live';
 
-      const homeScore = match.score?.fullTime?.home ?? null;
-      const awayScore = match.score?.fullTime?.away ?? null;
-      const isLocked = status === 'live' || status === 'finished' || new Date() >= matchDate;
-
       // Detect penalty shootout (knockout matches only — v4 API sets duration
       // to PENALTY_SHOOTOUT and populates score.penalties.{home,away})
       const wentToPenalties = match.score?.duration === 'PENALTY_SHOOTOUT';
+      const penHome = match.score?.penalties?.home ?? null;
+      const penAway = match.score?.penalties?.away ?? null;
       let penaltyWinner = null;
-      if (wentToPenalties) {
-        const penHome = match.score?.penalties?.home ?? null;
-        const penAway = match.score?.penalties?.away ?? null;
-        if (penHome != null && penAway != null) {
-          penaltyWinner = penHome > penAway ? 'home' : 'away';
-        }
+      if (wentToPenalties && penHome != null && penAway != null) {
+        penaltyWinner = penHome > penAway ? 'home' : 'away';
       }
+
+      // IMPORTANT: football-data.org's score/fullTime is a running cumulative
+      // total — for matches decided on penalties it already has the shootout
+      // goals added in (e.g. fullTime 4-5 = 1-1 after 120' + 3-4 on penalties).
+      // We want home_score/away_score to reflect the *match* result (1-1),
+      // with the shootout outcome tracked separately via went_to_penalties /
+      // penalty_winner — so subtract the penalty goals back out.
+      let homeScore = match.score?.fullTime?.home ?? null;
+      let awayScore = match.score?.fullTime?.away ?? null;
+      if (wentToPenalties && homeScore != null && awayScore != null && penHome != null && penAway != null) {
+        homeScore -= penHome;
+        awayScore -= penAway;
+      }
+      const isLocked = status === 'live' || status === 'finished' || new Date() >= matchDate;
 
       await pool.query(
         `INSERT INTO matches (external_id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name, venue, status, home_score, away_score, is_locked, went_to_penalties, penalty_winner)
