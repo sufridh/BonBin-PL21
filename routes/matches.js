@@ -8,11 +8,19 @@ const router = express.Router();
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
+      SELECT
         m.*,
         p.home_score_pick,
         p.away_score_pick,
-        CASE WHEN p.id IS NOT NULL THEN calculate_points(p.home_score_pick, p.away_score_pick, m.home_score, m.away_score) ELSE NULL END as points_earned
+        p.penalty_pick,
+        CASE WHEN p.id IS NOT NULL THEN
+          calculate_points(
+            p.home_score_pick, p.away_score_pick,
+            m.home_score, m.away_score,
+            COALESCE(m.went_to_penalties, FALSE),
+            m.penalty_winner, p.penalty_pick
+          )
+        ELSE NULL END as points_earned
       FROM matches m
       LEFT JOIN picks p ON m.id = p.match_id AND p.user_id = $1
       ORDER BY m.match_date ASC
@@ -29,7 +37,9 @@ router.get('/', authMiddleware, async (req, res) => {
 router.get('/public', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name, venue, city, status, home_score, away_score FROM matches ORDER BY match_date ASC'
+      `SELECT id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name,
+              venue, city, status, home_score, away_score, went_to_penalties, penalty_winner
+       FROM matches ORDER BY match_date ASC`
     );
     res.json(result.rows);
   } catch (err) {
@@ -54,18 +64,31 @@ router.post('/', adminMiddleware, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Add match error:', err);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error' });\
   }
 });
 
-// PATCH /api/matches/:id/score — admin updates score
+// PATCH /api/matches/:id/score — admin updates score (+ optional penalty info)
 router.patch('/:id/score', adminMiddleware, async (req, res) => {
-  const { home_score, away_score, status } = req.body;
+  const { home_score, away_score, status, went_to_penalties, penalty_winner } = req.body;
+
+  // Validate penalty fields when provided
+  if (went_to_penalties && !['home', 'away'].includes(penalty_winner)) {
+    return res.status(400).json({ error: 'penalty_winner must be "home" or "away" when went_to_penalties is true' });
+  }
 
   try {
     const result = await pool.query(
-      `UPDATE matches SET home_score=$1, away_score=$2, status=$3 WHERE id=$4 RETURNING *`,
-      [home_score, away_score, status || 'finished', req.params.id]
+      `UPDATE matches
+       SET home_score=$1, away_score=$2, status=$3,
+           went_to_penalties=$4, penalty_winner=$5
+       WHERE id=$6 RETURNING *`,
+      [
+        home_score, away_score, status || 'finished',
+        went_to_penalties ?? false,
+        went_to_penalties ? penalty_winner : null,
+        req.params.id
+      ]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Match not found' });
     res.json(result.rows[0]);
