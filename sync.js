@@ -90,6 +90,13 @@ async function syncMatches() {
         penaltyWinner = penHome > penAway ? 'home' : 'away';
       }
 
+      // TEMP DEBUG — remove once we've confirmed the real shape of
+      // score for a penalty-shootout match in this competition/season.
+      // Check Railway logs for this line after the next sync cycle.
+      if (wentToPenalties) {
+        console.log(`[Sync] PENALTY DEBUG ${homeTeam} vs ${awayTeam}:`, JSON.stringify(match.score));
+      }
+
       // IMPORTANT: football-data.org's score/fullTime is a running cumulative
       // total — for matches decided on penalties it already has the shootout
       // goals added in (e.g. fullTime 4-5 = 1-1 after 120' + 3-4 on penalties).
