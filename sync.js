@@ -53,7 +53,19 @@ async function syncMatches() {
     const matches = response.data.matches;
     console.log(`[Sync] Got ${matches.length} matches`);
 
+    let skipped = 0;
+    let failed = 0;
+
     for (const match of matches) {
+      // Later knockout-round matches show up before their teams are decided
+      // (e.g. "Winner of Match 73" — football-data.org returns homeTeam/
+      // awayTeam as null until the previous round finishes). Skip those for
+      // now; they'll sync correctly once both teams are known.
+      if (!match.homeTeam?.name || !match.awayTeam?.name) {
+        skipped++;
+        continue;
+      }
+
       const homeTeam = match.homeTeam.name;
       const awayTeam = match.awayTeam.name;
       const homeFlag = getFlag(homeTeam);
@@ -92,18 +104,23 @@ async function syncMatches() {
       }
       const isLocked = status === 'live' || status === 'finished' || new Date() >= matchDate;
 
-      await pool.query(
-        `INSERT INTO matches (external_id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name, venue, status, home_score, away_score, is_locked, went_to_penalties, penalty_winner)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT (external_id) DO UPDATE SET
-           status=$10, home_score=$11, away_score=$12, is_locked=$13,
-           home_team=$2, away_team=$3, home_flag=$4, away_flag=$5,
-           went_to_penalties=$14, penalty_winner=$15`,
-        [externalId, homeTeam, awayTeam, homeFlag, awayFlag, matchDate, stage, groupName, venue, status, homeScore, awayScore, isLocked, wentToPenalties, penaltyWinner]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO matches (external_id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name, venue, status, home_score, away_score, is_locked, went_to_penalties, penalty_winner)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT (external_id) DO UPDATE SET
+             status=$10, home_score=$11, away_score=$12, is_locked=$13,
+             home_team=$2, away_team=$3, home_flag=$4, away_flag=$5,
+             went_to_penalties=$14, penalty_winner=$15`,
+          [externalId, homeTeam, awayTeam, homeFlag, awayFlag, matchDate, stage, groupName, venue, status, homeScore, awayScore, isLocked, wentToPenalties, penaltyWinner]
+        );
+      } catch (rowErr) {
+        failed++;
+        console.error(`[Sync] Failed to upsert match ${externalId} (${homeTeam} vs ${awayTeam}):`, rowErr.message);
+      }
     }
 
-    console.log('[Sync] Done ✓');
+    console.log(`[Sync] Done ✓ (${skipped} skipped, ${failed} failed)`);
   } catch (err) {
     if (err.response?.status === 429) {
       console.warn('[Sync] Rate limited by football-data.org, will retry later');
