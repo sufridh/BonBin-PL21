@@ -64,7 +64,7 @@ router.post('/', adminMiddleware, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Add match error:', err);
-    res.status(500).json({ error: 'Server error' });\
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
