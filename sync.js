@@ -72,13 +72,26 @@ async function syncMatches() {
       const awayScore = match.score?.fullTime?.away ?? null;
       const isLocked = status === 'live' || status === 'finished' || new Date() >= matchDate;
 
+      // Detect penalty shootout (knockout matches only — v4 API sets duration
+      // to PENALTY_SHOOTOUT and populates score.penalties.{home,away})
+      const wentToPenalties = match.score?.duration === 'PENALTY_SHOOTOUT';
+      let penaltyWinner = null;
+      if (wentToPenalties) {
+        const penHome = match.score?.penalties?.home ?? null;
+        const penAway = match.score?.penalties?.away ?? null;
+        if (penHome != null && penAway != null) {
+          penaltyWinner = penHome > penAway ? 'home' : 'away';
+        }
+      }
+
       await pool.query(
-        `INSERT INTO matches (external_id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name, venue, status, home_score, away_score, is_locked)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        `INSERT INTO matches (external_id, home_team, away_team, home_flag, away_flag, match_date, stage, group_name, venue, status, home_score, away_score, is_locked, went_to_penalties, penalty_winner)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (external_id) DO UPDATE SET
            status=$10, home_score=$11, away_score=$12, is_locked=$13,
-           home_team=$2, away_team=$3, home_flag=$4, away_flag=$5`,
-        [externalId, homeTeam, awayTeam, homeFlag, awayFlag, matchDate, stage, groupName, venue, status, homeScore, awayScore, isLocked]
+           home_team=$2, away_team=$3, home_flag=$4, away_flag=$5,
+           went_to_penalties=$14, penalty_winner=$15`,
+        [externalId, homeTeam, awayTeam, homeFlag, awayFlag, matchDate, stage, groupName, venue, status, homeScore, awayScore, isLocked, wentToPenalties, penaltyWinner]
       );
     }
 
